@@ -1,6 +1,6 @@
 # Request: let a mod bring the browser pane on screen
 
-Ready to post as an issue on the Claude Code repository. Not sent yet.
+Posted on 2026-10-07: https://github.com/anthropics/claude-code/issues/100202
 
 **What happens today**
 
