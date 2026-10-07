@@ -23,7 +23,7 @@ function world(on: any, opts: any = {}) {
     if (opts.read) await opts.read(e)
     return had !== undefined ? { value: had } : { deny: 'ENOENT: ' + e.path }
   })
-  on('fs.write', (_$: any, e: any) => { if (e.path.endsWith('/pane-trace.json')) { (log.traces ??= []).push(JSON.parse(e.text)); return { value: undefined } } if (e.path.endsWith('/note-page-opening.html')) { (log.temp ??= []).push(e.path); return { value: undefined } } files.set(e.path, e.text); log.writes.push({ path: e.path, data: JSON.parse(e.text) }); return { value: undefined } })
+  on('fs.write', (_$: any, e: any) => { if (e.path.endsWith('/pane-trace.json')) { (log.traces ??= []).push(JSON.parse(e.text).runs.at(-1)); files.set(e.path, e.text); return { value: undefined } } if (e.path.endsWith('/note-page-opening.html')) { (log.temp ??= []).push(e.path); return { value: undefined } } files.set(e.path, e.text); log.writes.push({ path: e.path, data: JSON.parse(e.text) }); return { value: undefined } })
   on('command.register', (_$: any, e: any) => ({ value: { command: e.name } }))
   on('command.list', async () => { if (opts.list) await opts.list(); return { value: opts.commands ?? [] } })
   on('ui.toast', (_$: any, e: any) => { log.toasts.push(e.text); return { value: undefined } })

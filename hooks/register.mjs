@@ -24,6 +24,17 @@ const NO_ENGINE = 'The note page needs Node.js to run. Install it from nodejs.or
 
 let engine = null   // how to run a JavaScript file here, once found: ['/path/to/node'], ['…/deno', 'run', '-A']
 let lookAgain = 0   // when nothing was found: not before this time
+// Opening early. Typing "/page" and pressing Enter sends a message, and right after a message
+// the app can take many seconds (11 were measured) before it acts on a request to show the
+// pane. While the command is still being typed the app is calm and shows it in well under a
+// second. So the pane is brought up then, as soon as what is typed can only become /page,
+// and Enter finds it on screen.
+let early = null    // the open that typing started, while it runs
+let earlyAt = 0     // when typing last started one, so "/pa", "/pag", "/page" start one between them
+let commands = null // every slash command's name, to tell when what is typed can only mean /page
+let watching = false
+// ponytail: the list is read once per load; a command added later that also starts "/pa" would
+// make "/pa" bring the pane up for it too, which costs nothing but a pane on screen
 let wanted = false  // a person uses this chat, so it should have a helper
 let running = false // the helper process is up
 let ready = false   // …and this chat is being served
@@ -185,7 +196,7 @@ async function pageIsOpen($) {
 // helperUp: resolves true once this chat's helper is serving the page.
 // Answers 'shown', 'tucked' (it is there, but the pane is not on screen), 'no-helper', or ''
 // where there is no such pane (a terminal session) or it would not open.
-async function showInPane($, helperUp) {
+async function showInPane($, helperUp, via) {
   const call = (tool, args = {}) => $.mcp.call(BROWSER, tool, args)
   const text = (result) => (result.content ?? []).map((c) => c.text ?? '').join('\n')
   const look = async () => {
@@ -206,7 +217,8 @@ async function showInPane($, helperUp) {
   // a moment and removed again. From anywhere else the app stops and asks "open this file?"
   // every single time, which is a click and several seconds; a file in the chat's own folder
   // it opens without asking.
-  const cwd = await $.session.cwd()
+  // (the project folder the app knows the chat by: a `cd` in the shell does not move it)
+  const cwd = await $.session.root()
   const temp = cwd + '/.claude/note-page-opening.html'
   let hadFolder = true, wrote = false
   try {
@@ -229,7 +241,12 @@ async function showInPane($, helperUp) {
   const note = async (step, now, extra) => trace.push({ ms: (await $.clock.now()) - began, step, tabs: now?.tabs?.map((t) => t.origin.replace(/#.*/, '')), onScreen: now?.onScreen, ...extra })
   const done = async (result) => {
     await sweep()
-    try { await $.fs.write(dir + '/pane-trace.json', JSON.stringify({ at: await $.clock.now(), result, trace }, null, 1)) } catch {}
+    // The last few runs are kept, so a run started by typing is not written over by the Enter after it
+    try {
+      let runs = []
+      try { runs = JSON.parse(await $.fs.read(dir + '/pane-trace.json')).runs ?? [] } catch {}
+      await $.fs.write(dir + '/pane-trace.json', JSON.stringify({ runs: [...runs, { at: await $.clock.now(), via, result, trace }].slice(-6) }, null, 1))
+    } catch {}
     return result
   }
   // Coming on screen takes the app a moment: look a few times before deciding it did not
@@ -254,12 +271,22 @@ async function showInPane($, helperUp) {
       // First get the pane on screen, so something shows at once. A mod opening a web page
       // does not do that: the app leaves the pane tucked away. Opening a local file does.
       // So a small file of ours ("Opening your note page…") goes up first.
-      const file = await call('preview_start', { url: mine })
-      now = await until(1600)
-      await note('local file opened, which brings the pane on screen', now, { waited: now.waited, inChatFolder: wrote, said: text(file).slice(0, 120) })
-      if (!now.onScreen && mine !== own) {
-        // Safety net: the mod's own copy of that file. Slower, since the app asks before it
-        // opens a file from outside the chat's folder, but it is the way seen to work.
+      // The app can take a while over this when it is busy with a large folder: say so at once
+      if (via !== 'typing') $.ui.toast('Opening the note page…')
+      let file = await call('preview_start', { url: mine })
+      now = await until(file.isError ? 0 : 1600)
+      // When the app is busy (right after a message, or as a turn ends) the pane can stay
+      // hidden although the file opened: seen once. Opening the same file again asks again,
+      // and costs nothing. The mod's own copy of the file is not tried in its place: the app
+      // asks "allow?" for that one every single time, and a card to click is worse than a wait.
+      let asks = 1
+      for (; asks < 4 && !now.onScreen && !file.isError; asks++) {
+        file = await call('preview_start', { url: mine })
+        now = await until(2000)
+      }
+      await note('local file opened, which brings the pane on screen', now, { waited: now.waited, asks, inChatFolder: wrote, said: text(file).slice(0, 120) })
+      if (file.isError && mine !== own) {
+        // Only when the file in the chat's folder could not be opened at all
         const again = await call('preview_start', { url: own })
         now = await until(1200)
         await note('the mod\'s own file opened instead', now, { waited: now.waited, said: text(again).slice(0, 120) })
@@ -295,15 +322,45 @@ async function showInPane($, helperUp) {
 // Shows the note page and points it at this chat: what /page and the button above the message
 // box both do. In the Claude app that is its own browser pane, elsewhere a browser window.
 // Answers a sentence when there is something the person should know.
-async function openPage($) {
+// What is typed so far in the message box. True when it started bringing the pane up.
+function typing($, draft, signal) {
+  const m = /^\/([a-z]{2,4})$/.exec(draft)
+  if (!m || !'page'.startsWith(m[1]) || early) return false
+  early = (async () => {
+    const now = await $.clock.now()
+    if (now - earlyAt < 5000) return
+    commands ??= (await $.command.list()).map((c) => c.name)
+    if (commands.some((n) => n !== 'page' && n.startsWith(m[1]))) return
+    earlyAt = now
+    await showInPane($, async () => ready, 'typing')
+  })().catch(() => {}).finally(() => { early = null })
+  return true
+}
+
+// Where the app does not report each edit, the box is read a few times after typing begins
+async function watchDraft($) {
+  if (watching) return
+  watching = true
+  try {
+    for (let i = 0; i < 25; i++) { // about three seconds: long enough to type "/page"
+      const { text } = await $.prompt.read()
+      if (!text.startsWith('/') || text.length > 5) return
+      if (typing($, text)) return
+      await $.clock.sleep(120)
+    }
+  } catch {} finally { watching = false }
+}
+
+async function openPage($, via) {
   await used($, true)
+  if (early) await early // typing already started it: that one is waited for, no second one is started
   // Asked more than once below; the wait itself happens once
   let up
   const helperUp = () => up ??= (async () => {
     for (let i = 0; i < 20 && !ready; i++) await $.clock.sleep(200)
     return ready
   })()
-  const pane = await showInPane($, helperUp)
+  const pane = await showInPane($, helperUp, via)
   if (pane === 'shown') return ''
   if (pane === 'tucked') return 'The note page is ready in the browser pane. Click the globe icon at the top to see it.'
   if (!(await helperUp())) return problem || 'The note page helper did not start. Type /page again in a moment.'
@@ -390,8 +447,20 @@ export function register(on) {
   // /page: this chat becomes the page's target, and the page is shown
   on('command.run', { command: 'page' }, async ($, e) => {
     if (machine(e.origin)) return { text: 'The note page only opens for a person at the chat.' }
-    const note = await openPage($)
+    const note = await openPage($, 'command')
     return note ? { text: note } : {}
+  })
+
+  // The person is typing in the message box. Never in the way of a key: the edit goes through
+  // first and unchanged, and whatever this does is not waited for.
+  on('prompt.edit', async ($, e, next) => {
+    const box = await next(e)
+    try { typing($, String(box?.text ?? '')) } catch {}
+    return box
+  })
+  on('ui.render', { component: 'PromptHint' }, ($, e, next) => {
+    if (e.props?.isDraft) void watchDraft($)
+    return next(e)
   })
 
   // The same with one click and no typing: a quiet button above the message box
@@ -399,7 +468,7 @@ export function register(on) {
     if (e.props.hasSurvey) return next(e) // a survey wants the band: it goes first
     const { Box, Button } = $.ui.resolve(e)
     const onPress = async () => {
-      const note = await openPage($)
+      const note = await openPage($, 'button')
       if (note) $.ui.toast(note)
     }
     return Box({ paddingX: 1, children: [Button({ key: 'note-page', label: 'Open note page', plain: true, dimColor: true, onPress })] })

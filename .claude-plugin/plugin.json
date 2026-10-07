@@ -1,6 +1,6 @@
 {
   "name": "note-page",
-  "version": "0.5.0",
+  "version": "0.6.2",
   "description": "A real web page for writing a message at your own pace, with screenshots in place, then sending it to a Claude chat.",
   "author": {
     "name": "Hadzhymurad"

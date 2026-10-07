@@ -38,6 +38,9 @@ Then start a new chat.
 Type `/page`, or click **Open note page** above the message box. Write, paste, and press
 **Send** (⌘↵). ⇧⌘↵ sends and keeps the text.
 
+The pane starts opening while you are still typing `/page`, so it is there when you press
+Enter.
+
 ## What it needs
 
 - A Claude Code version with mods (October 2026 or later). Made for the desktop app; in a

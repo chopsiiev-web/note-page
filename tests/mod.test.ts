@@ -23,7 +23,7 @@ function world(on: any, opts: any = {}) {
     if (opts.read) await opts.read(e)
     return files.has(e.path) ? { value: files.get(e.path) } : { deny: 'ENOENT: ' + e.path }
   })
-  on('fs.write', (_$: any, e: any) => { if (e.path.endsWith('/pane-trace.json')) { (log.traces ??= []).push(JSON.parse(e.text)); return { value: undefined } } if (e.path.endsWith('/note-page-opening.html')) { (log.temp ??= []).push(e.path); return { value: undefined } } files.set(e.path, e.text); log.writes.push({ path: e.path, data: JSON.parse(e.text) }); return { value: undefined } })
+  on('fs.write', (_$: any, e: any) => { if (e.path.endsWith('/pane-trace.json')) { (log.traces ??= []).push(JSON.parse(e.text).runs.at(-1)); files.set(e.path, e.text); return { value: undefined } } if (e.path.endsWith('/note-page-opening.html')) { (log.temp ??= []).push(e.path); return { value: undefined } } files.set(e.path, e.text); log.writes.push({ path: e.path, data: JSON.parse(e.text) }); return { value: undefined } })
   on('command.register', (_$: any, e: any) => { log.registered = e; return { value: { command: e.name } } })
   on('command.list', async () => { if (opts.list) await opts.list(); return { value: opts.commands ?? [] } })
   on('ui.toast', (_$: any, e: any) => { log.toasts.push(e.text); return { value: undefined } })
@@ -297,6 +297,50 @@ function paneStandIn(start: 'closed' | 'shown' | 'hidden' | 'stuck') {
   return { pane, mcp }
 }
 
+test('typing "/pa…" brings the pane up before Enter, once, and only when it can mean nothing but /page', async ($, on) => {
+  const clock = mock.clock(on, { now: 5000 })
+  const stand = paneStandIn('hidden')
+  const opts: any = { mcp: stand.mcp, commands: [{ name: 'page', description: '', source: 'plugin' }, { name: 'pause', description: '', source: 'user' }], files: { [FILE]: JSON.stringify({ lastActive: 10 }), ['/home/u/.claude/note-page/key']: 'k'.repeat(32) } }
+  const { log } = world(on, opts)
+  const acts: any[] = (log.mcp = [])
+  // the engine's own part of an edit: the splice applied
+  on('prompt.edit', (_$: any, e: any) => ({ text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end), cursor: e.start + e.inputText.length }))
+  const h = helper(log)
+  on('process.spawn', h.gen)
+  await $.session.start(START)
+  await clock.settle()
+  h.feed('{"role":"hub","url":"http://localhost:47821/"}\n')
+  await clock.settle()
+  const type = async (before: string, ch: string) => { const box = await $.prompt.edit({ origin: { kind: 'composer' }, text: before, cursor: before.length, start: before.length, end: before.length, inputText: ch }); await clock.advance(400); return box }
+  // the key itself always goes through unchanged
+  expect(await type('', '/')).toMatchObject({ text: '/' })
+  expect(await type('/', 'p')).toMatchObject({ text: '/p' })
+  // "/pa" could still become /pause: nothing yet
+  await type('/p', 'a')
+  expect(acts.filter((a) => a[1] === 'preview_start')).toHaveLength(0)
+  // "/pag" can only be /page: the pane comes up now, with no toast and no claim on the chat
+  await type('/pa', 'g')
+  expect(acts.filter((a) => a[1] === 'preview_start').map((a) => String(a[2].url))).toEqual(['file:///Users/x/Projects/.claude/note-page-opening.html'])
+  expect(stand.pane.state).toBe('shown')
+  expect(log.traces.at(-1)).toMatchObject({ via: 'typing', result: 'shown' })
+  expect(log.toasts).toHaveLength(0)
+  expect(log.writes.some((w: any) => w.data.claimedAt > 0)).toBe(false)
+  // the last letter does not start a second one
+  const before = acts.length
+  await type('/pag', 'e')
+  expect(acts.length).toBe(before)
+  // Enter: the pane is already on screen, so /page opens no file, and now the chat is claimed
+  const out = await $.command.run({ command: 'page', args: '', origin: { kind: 'composer' } })
+  expect(out).toEqual({})
+  expect(acts.slice(before).filter((a) => a[1] === 'preview_start')).toHaveLength(0)
+  expect(log.traces.at(-1)).toMatchObject({ via: 'command', result: 'shown' })
+  expect(log.writes.at(-1).data.claimedAt).toBeGreaterThan(0)
+  // other text in the box never does any of this
+  for (const [b, c] of [['', 'h'], ['h', 'i'], ['/', 'x'], ['/pagex', 'y'], ['say /pa', 'g']]) await type(b, c)
+  expect(acts.slice(before).filter((a) => a[1] === 'preview_start')).toHaveLength(0)
+  h.feed(null)
+})
+
 test('/page in the Claude app shows the page in the app\'s own browser pane, and opens no other window', async ($, on) => {
   const clock = mock.clock(on, { now: 5000 })
   const stand = paneStandIn('closed')
@@ -354,11 +398,12 @@ test('/page in the Claude app shows the page in the app\'s own browser pane, and
   stand.pane.state = 'stuck'
   out = undefined
   run = $.command.run(page()).then((r) => { out = r })
-  for (let i = 0; i < 30 && !out; i++) await clock.advance(200) // it looks a few times, both ways, before giving up
+  for (let i = 0; i < 60 && !out; i++) await clock.advance(200) // it gives the app eight seconds before giving up
   await run
   expect(out.text).toMatch(/globe icon/)
-  // the safety net was tried too: the mod's own copy of the file
-  expect(log.traces.at(-1).trace.map((t: any) => t.step)).toEqual(['start', 'local file opened, which brings the pane on screen', "the mod's own file opened instead", 'end'])
+  // no second file from outside the chat's folder: that one makes the app ask "allow?" every time
+  expect(log.traces.at(-1).trace.map((t: any) => t.step)).toEqual(['start', 'local file opened, which brings the pane on screen', 'end'])
+  expect(log.mcp.filter((a: any) => a[1] === 'preview_start' && /reveal\.html/.test(String(a[2].url)))).toHaveLength(0)
   expect(log.traces.at(-1).trace.every((t: any) => typeof t.ms === 'number')).toBe(true) // each step is timed
   expect(log.runs).toHaveLength(0)
   h.feed(null)
