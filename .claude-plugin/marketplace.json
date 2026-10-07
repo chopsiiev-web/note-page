@@ -1,0 +1,12 @@
+{
+  "name": "note-page",
+  "owner": { "name": "Hadzhymurad" },
+  "metadata": { "description": "Note page: a roomy writing page for Claude Code" },
+  "plugins": [
+    {
+      "name": "note-page",
+      "source": "./",
+      "description": "A real web page for writing a message at your own pace, with screenshots in place, then sending it to a Claude chat."
+    }
+  ]
+}

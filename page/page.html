@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Note page</title>
+<style>
+  /* References: iA Writer (one quiet centred column, blue caret, focus mode), Bear (pictures in
+     the text with soft corners, small floating bar), Notion (clean sheet, system sans, wide margins). */
+  :root {
+    --sheet: #fdfcf9; --card: #ffffff; --ink: #1f1e1c; --soft: #8b877e; --quote: #6d685e; --line: #e7e3da; --hover: #f1eee7;
+    --accent: #0b84ff; --tint: #e6f1ff; --tint-ink: #0559b3; --select: #cfe5ff; --good: #1f9d55; --shadow: rgba(40, 34, 20, .4);
+    /* a bright sheet with a faint paper grain */
+    --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .3 0 0 0 0 .22 0 0 0 .07 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  /* When the Claude app is in its dark theme the page follows it: a soft warm dark sheet,
+     the same grain, so it does not glare beside the chat at night */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --sheet: #1e1d1b; --card: #292724; --ink: #ece8e0; --soft: #8f897d; --quote: #a8a297; --line: #393631; --hover: #34312d;
+      --accent: #4da3ff; --tint: #1b3552; --tint-ink: #9cc9ff; --select: #2a4d77; --good: #4cc38a; --shadow: rgba(0, 0, 0, .6);
+      --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 .96 0 0 0 0 .88 0 0 0 .05 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--sheet); }
+  body {
+    margin: 0; min-height: 100vh; color: var(--ink);
+    font: 17px/1.65 -apple-system, "SF Pro Text", "Inter", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    background: var(--sheet) var(--grain);
+  }
+
+  #page { position: relative; max-width: 720px; min-height: 100vh; margin: 0 auto; padding: 72px 32px 180px; outline: none; white-space: pre-wrap; overflow-wrap: break-word; caret-color: var(--accent); }
+  #page ::selection { background: var(--select); }
+  /* Pictures sit in the text at a modest size; one click on a picture's corner makes it big or removes it */
+  #page img { display: block; max-width: min(100%, 420px); max-height: 240px; margin: 10px 0 14px; border-radius: 8px; border: 1px solid var(--line); box-shadow: 0 6px 20px -10px var(--shadow); background: #fff; }
+  #page img.big { max-width: 100%; max-height: none; }
+  /* Claude's words, quoted: quieter than yours, with a rule down the side. One block per line. */
+  #page .q, #page blockquote { margin: 0; padding: 1px 0 1px 16px; border-left: 3px solid var(--line); color: var(--quote); font-size: 15.5px; line-height: 1.55; }
+  #page :not(.q) + .q, #page .q:first-child { margin-top: 10px; }
+  #page .q + :not(.q) { margin-top: 8px; }
+  #page .q:last-child { margin-bottom: 8px; }
+  /* Focus mode: the line you are in stays bright, the rest steps back. Only blocks that hold
+     text directly are dimmed, so a block wrapped in another is not dimmed twice. */
+  body.focus #page div:not(:has(> div)) { opacity: .3; transition: opacity .18s; }
+  body.focus #page div.now { opacity: 1; }
+
+  /* What an empty page shows: how it works (in full until the first page is sent), and the
+     last page sent, so "Sent" is not just a word that vanishes */
+  #empty { position: absolute; z-index: 1; top: 0; left: 50%; transform: translateX(-50%); width: min(720px, 100%); padding: 72px 32px 0; color: var(--soft); pointer-events: none; }
+  #empty[hidden], #receipt[hidden], #pic[hidden] { display: none; }
+  #empty p { margin: 0; }
+  #empty .more { margin-top: 26px; font-size: 14.5px; line-height: 1.9; }
+  #empty .more b { font-weight: 500; color: var(--quote); }
+  #receipt { position: absolute; top: 22px; left: 32px; right: 32px; display: flex; align-items: center; gap: 10px; font: 13px/1.3 -apple-system, "SF Pro Text", sans-serif; }
+  #receipt .tick { color: var(--good); }
+  #receipt .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #receipt button { pointer-events: auto; flex: none; padding: 5px 9px; border: 1px solid var(--line); color: var(--ink); background: var(--card); }
+
+  /* The two small buttons that appear on a picture's corner */
+  #pic { position: absolute; z-index: 1; display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--card); border: 1px solid var(--line); box-shadow: 0 8px 22px -12px var(--shadow); font: 12px/1 -apple-system, "SF Pro Text", sans-serif; }
+  #pic button { padding: 6px 8px; border-radius: 6px; }
+
+  #bar, .pop, #history, #toast { font: 13px/1.3 -apple-system, "SF Pro Text", sans-serif; color: var(--ink); }
+  /* short messages float above the bar, so they never squeeze it */
+  #toast { position: fixed; z-index: 2; left: 50%; bottom: 74px; transform: translateX(-50%); width: max-content; max-width: calc(100vw - 24px); padding: 8px 12px; border-radius: 10px; background: var(--ink); color: var(--sheet); text-align: center; box-shadow: 0 10px 30px -14px var(--shadow); }
+  #toast[hidden] { display: none; }
+  /* shown instead of everything else when this browser does not hold the key yet */
+  #locked { position: fixed; z-index: 3; inset: 0; display: grid; place-items: center; padding: 24px; background: var(--sheet); font: 15px/1.6 -apple-system, "SF Pro Text", sans-serif; }
+  #locked[hidden] { display: none; }
+  #locked div { max-width: 520px; }
+  #locked b { font-size: 17px; }
+  #locked p { margin: 10px 0; color: var(--quote); }
+  #locked code { display: block; padding: 10px 12px; border-radius: 8px; background: var(--hover); font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; user-select: all; }
+  #bar {
+    position: fixed; z-index: 2; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100vw - 24px);
+    display: flex; align-items: center; gap: 4px; padding: 6px; white-space: nowrap;
+    background: color-mix(in srgb, var(--card) 88%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 30px -14px var(--shadow);
+  }
+  button { font: inherit; font-weight: 500; padding: 8px 11px; border-radius: 8px; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+  button:hover { background: var(--hover); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  kbd { font: inherit; opacity: .5; margin-left: 8px; }
+  #target { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--soft); }
+  #target b { font-weight: 500; color: var(--ink); max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+  /* What the chat is doing: grey = waiting for you, pulsing blue = Claude is working, green = Claude replied */
+  #dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+  #dot.busy { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  #dot.new { background: var(--good); }
+  @keyframes pulse { 50% { opacity: .25; } }
+  #status { min-width: 62px; padding: 0 8px; color: var(--soft); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
+  #quote.fresh::after { content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 7px; border-radius: 50%; background: var(--good); vertical-align: 1px; }
+  #sharpen[aria-pressed="true"] { background: var(--tint); color: var(--tint-ink); }
+  #sharpen::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; border: 1.5px solid currentColor; vertical-align: 1px; }
+  #sharpen[aria-pressed="true"]::before { background: currentColor; }
+  #more { padding: 8px 10px; letter-spacing: 1px; }
+  #send { background: var(--ink); color: var(--sheet); }
+  #send:hover { background: var(--ink); opacity: .86; }
+
+  .pop { position: fixed; z-index: 3; display: flex; flex-direction: column; min-width: 220px; max-width: min(360px, calc(100vw - 24px)); padding: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 16px 40px -16px var(--shadow); }
+  .pop[hidden], #history[hidden] { display: none; }
+  .pop button { display: flex; justify-content: space-between; gap: 16px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pop button[aria-checked="true"]::after { content: "✓"; color: var(--accent); }
+  .pop small { padding: 6px 11px 4px; color: var(--soft); font-size: 12px; }
+
+  #history { position: fixed; z-index: 3; left: 50%; bottom: 76px; transform: translateX(-50%); width: min(560px, calc(100vw - 24px)); max-height: min(60vh, 520px); overflow: auto; padding: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 20px 50px -18px var(--shadow); }
+  #history h2 { margin: 0; padding: 10px 11px 6px; font-size: 12px; font-weight: 500; color: var(--soft); }
+  #history button { display: block; width: 100%; padding: 9px 11px; font-weight: 400; }
+  #history .what { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #history .meta { display: block; margin-top: 2px; color: var(--soft); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #history p { margin: 0; padding: 12px 11px 16px; color: var(--soft); }
+  #history .stored { padding: 10px 11px 8px; margin-top: 4px; border-top: 1px solid var(--line); font-size: 12px; }
+  #history .stored button { display: inline; width: auto; padding: 2px 6px; margin-left: 4px; font-size: 12px; color: var(--soft); text-decoration: underline; }
+
+  @media (max-width: 600px) {
+    #page { padding: 48px 20px 180px; }
+    #empty { padding: 48px 20px 0; }
+    #receipt { top: 12px; left: 20px; right: 20px; }
+    kbd, #status { display: none; }
+    #target b { max-width: 96px; }
+  }
+</style>
+
+<div id="page" contenteditable="true" spellcheck="true"></div>
+
+<div id="empty" hidden>
+  <div id="receipt" hidden><span class="tick">✓</span><span class="what"></span><button id="bring-back">Bring it back</button></div>
+  <p>Write freely. Nothing is sent until you press Send.</p>
+  <div class="more" id="guide" hidden>
+    <p><b>Screenshots:</b> paste one and it lands right here, in the text.</p>
+    <p><b>To:</b> the chat this page goes to. The dot shows if Claude is working or has replied.</p>
+    <p><b>Quote reply:</b> brings in Claude's last answer. Click a line and type under it.</p>
+    <p><b>Sharpen:</b> turns your page into a clear prompt before Claude reads it.</p>
+    <p><b>•••</b> holds your sent pages, focus mode and more.</p>
+  </div>
+</div>
+<div id="pic" hidden><button data-pic="size">Bigger</button><button data-pic="remove">Remove</button></div>
+
+<div id="bar">
+  <button id="target" title="The chat this page will be sent to"><i id="dot"></i><span>To</span><b id="target-name">…</b></button>
+  <span id="status"></span>
+  <button id="quote" title="Brings Claude's last reply in as a quote. Only the lines you answer under are sent back. To quote just a part: copy it in the chat and paste it here.">Quote reply</button>
+  <button id="sharpen" aria-pressed="false" title="Turns the page into a clear prompt before Claude carries it out">Sharpen</button>
+  <button id="more" aria-label="More" title="More">•••</button>
+  <button id="send">Send<kbd>⌘↵</kbd></button>
+</div>
+
+<div id="toast" role="status" hidden></div>
+<div id="locked" hidden><div>
+  <b>This browser has not been let in yet.</b>
+  <p>Type <span style="font-family: ui-monospace, Menlo, monospace">/page</span> in any Claude chat. Or paste this address into the address bar, once:</p>
+  <code>__DOOR__</code>
+  <p>Why: only your own Mac account may send pages into your chats, and this is how a browser proves it is yours.</p>
+</div></div>
+
+<div id="menu" class="pop" hidden>
+  <button data-do="history">Sent pages…</button>
+  <button data-do="keep">Send and keep the text<kbd>⇧⌘↵</kbd></button>
+  <button data-do="quote">Quote or unquote the selected lines</button>
+  <button data-do="focus" id="focus-item" role="menuitemcheckbox" aria-checked="false">Focus mode</button>
+  <button data-do="clear">Clear the page</button>
+</div>
+<div id="chats" class="pop" hidden></div>
+<div id="history" hidden></div>
+
+<script type="module" nonce="__NONCE__">
+import { toText, quoteHtml, isFrom } from '/text.mjs'
+
+const VERSION = '__VERSION__'
+const $ = (id) => document.getElementById(id)
+const page = $('page')
+// Browser storage can be off or full; the page must still work without it
+const kept = (box, k) => { try { return box.getItem(k) || '' } catch { return '' } }
+const keep = (box, k, v) => { try { box.setItem(k, v); return true } catch { return false } }
+const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+// ---- the key: what lets this browser read and send ----
+
+// It arrives once, after the # of the address, when the door file is opened (the /page command
+// does that). From then on this browser remembers it. It is never part of the page itself.
+let KEY = kept(localStorage, 'note-page:key')
+function takeKey() {
+  const fresh = /^#([0-9a-f]{32})$/.exec(location.hash)
+  if (!fresh) return false
+  KEY = fresh[1]
+  keep(localStorage, 'note-page:key', KEY)
+  window.history.replaceState(null, '', location.pathname) // do not leave it in the address bar
+  return true
+}
+takeKey()
+// The door opened in a tab that already shows the page: no reload happens, only the # changes
+addEventListener('hashchange', () => { if (takeKey()) refresh() })
+const api = (path, init) => fetch(path + (path.includes('?') ? '&' : '?') + 'k=' + KEY, init).catch(() => null)
+
+// ---- the word count in the bar, and short messages floating above it ----
+
+let offline = false, noteTimer
+const words = () => { const n = (page.innerText.match(/\S+/g) || []).length; return n ? n + (n === 1 ? ' word' : ' words') : '' }
+let chatState = '' // "Claude is working…" / "Claude replied", for the chat this page goes to
+const show = () => { $('status').textContent = offline ? 'Reconnecting…' : chatState || words() }
+const say = (text, ms = 4000) => {
+  $('toast').textContent = text
+  $('toast').hidden = !text
+  clearTimeout(noteTimer)
+  noteTimer = setTimeout(() => { $('toast').hidden = true }, ms)
+}
+
+// ---- the draft: kept in this browser until it is sent ----
+
+const isBlank = () => !page.textContent.trim() && !page.querySelector('img')
+// The page's content without the marks focus mode leaves on it
+const cleanHtml = () => {
+  const copy = page.cloneNode(true)
+  for (const el of copy.querySelectorAll('.now')) el.classList.remove('now')
+  for (const el of copy.querySelectorAll('[class=""]')) el.removeAttribute('class')
+  return copy.innerHTML
+}
+// ---- the empty page: how it works, and the last page sent ----
+
+let lastSent = null // { label, at, text, html } of the page sent last
+try { lastSent = JSON.parse(kept(localStorage, 'note-page:last')) } catch {}
+function showEmpty() {
+  const blank = isBlank()
+  $('empty').hidden = !blank
+  if (!blank) return
+  // The full guide shows until the first page has been sent; after that one line is enough
+  $('guide').hidden = kept(localStorage, 'note-page:used') === '1'
+  $('receipt').hidden = !lastSent
+  if (lastSent) $('receipt').querySelector('.what').textContent = 'Sent to ' + lastSent.label + ' at ' + when(lastSent.at) + ': ' + String(lastSent.text).replace(/\[screenshot: [^\]]*\]/g, '(picture)').replace(/\s+/g, ' ').slice(0, 140)
+}
+$('bring-back').addEventListener('mousedown', (e) => e.preventDefault())
+$('bring-back').onclick = () => {
+  if (!lastSent) return
+  const html = lastSent.html || String(lastSent.text).split('\n').map((l) => '<div>' + (esc(l) || '<br>') + '</div>').join('')
+  lastSent = null
+  keep(localStorage, 'note-page:last', '')
+  appendHtml(html)
+  say('Brought back. Change it and send it again.')
+}
+
+let wasBlank = true
+const save = () => {
+  wasBlank = isBlank()
+  showEmpty()
+  if (!keep(localStorage, 'note-page', wasBlank ? '' : cleanHtml())) say('This draft is too big to keep after closing')
+}
+page.innerHTML = kept(localStorage, 'note-page')
+document.execCommand('defaultParagraphSeparator', false, 'div')
+
+const quoteLine = (n) => (n && (n.nodeType === 1 ? n : n.parentNode))?.closest('.q') || null
+
+// Every line lives in a block of its own, so focus mode and quotes have something to hold on to.
+// Done through the browser's own editing command, so undo still works.
+function blockify() {
+  const sel = getSelection()
+  let at = sel.anchorNode
+  // The cursor is sometimes reported as "the page, after its nth child" instead of inside the text
+  if (at === page) at = page.childNodes[Math.max(0, sel.anchorOffset - 1)] || null
+  if (at && at.nodeType === 3 && at.parentNode === page) document.execCommand('formatBlock', false, 'div')
+}
+
+page.addEventListener('input', () => {
+  // Clearing a page that began with a quote can leave one empty quoted line behind. The first
+  // thing typed on an empty page is always yours.
+  if (wasBlank) quoteLine(getSelection().anchorNode)?.classList.remove('q')
+  blockify()
+  save()
+  show()
+  mark()
+  attempt = '' // the page changed, so it is a new page
+  if (isBlank()) follows = true
+  else if (follows) refresh() // the first keystroke settles where this page goes, with a fresh list
+})
+
+// ---- quoting Claude's reply, and answering inside it ----
+
+// If the cursor is in a quoted line, opens an un-quoted line at that spot and moves into it;
+// the quote carries on below. Uses the browser's own editing commands, so undo steps back
+// through it cleanly. Returns true when it did.
+function answerHere() {
+  const sel = getSelection()
+  const row = sel.rangeCount && sel.isCollapsed ? quoteLine(sel.anchorNode) : null
+  if (!row) return false
+  const before = document.createRange()
+  before.selectNodeContents(row)
+  before.setEnd(sel.anchorNode, sel.anchorOffset)
+  const atEnd = before.toString() === row.textContent
+  const atStart = !atEnd && before.toString() === ''
+  document.execCommand('insertParagraph')
+  if (!atEnd && !atStart) document.execCommand('insertParagraph') // mid-line: open a gap between the two halves
+  if (!atEnd) getSelection().modify('move', 'backward', 'character') // step back into the empty line
+  const gap = quoteLine(getSelection().anchorNode)
+  if (gap && gap.textContent === '') gap.classList.remove('q') // the new line is yours, not a quote
+  return true
+}
+page.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return
+  if (answerHere()) { e.preventDefault(); save() }
+})
+// Words typed straight into a quoted line would count as Claude's and be left out when the
+// page is sent. So typing there opens an answer line first, and the words land in that.
+page.addEventListener('beforeinput', (e) => {
+  if (e.inputType === 'insertText' && !e.isComposing) answerHere()
+})
+
+// New content goes on a line of its own at the end, never into the middle of a sentence
+function appendHtml(html) {
+  page.focus()
+  const sel = getSelection()
+  sel.selectAllChildren(page)
+  sel.collapseToEnd()
+  if (!isBlank()) document.execCommand('insertParagraph')
+  document.execCommand('insertHTML', false, html)
+  save()
+  show()
+}
+
+// A part of Claude's reply as a quote, where the cursor is, on lines of its own
+function pasteQuote(text) {
+  const sel = getSelection()
+  const at = sel.anchorNode && (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentNode)
+  const line = at && at !== page ? at.closest('div') : null
+  // The quote starts on a line of its own: after the line being written, if there is one
+  const lineHasText = line && line !== page ? line.textContent !== '' : !isBlank()
+  if (lineHasText) document.execCommand('insertParagraph')
+  document.execCommand('insertHTML', false, quoteHtml(text) + '<div><br></div>')
+  save()
+  show()
+  say('Pasted as a quote of Claude. Write your answer under it.')
+}
+
+// Turns the selected lines into a quote, or back into your own words
+function toggleQuote() {
+  const sel = getSelection()
+  if (!sel.rangeCount) return
+  const range = sel.getRangeAt(0)
+  const lines = [...page.querySelectorAll('div')].filter((d) => !d.querySelector('div') && range.intersectsNode(d))
+  if (!lines.length) return say('Click a line, or select a few, first')
+  const allQuoted = lines.every((d) => d.classList.contains('q'))
+  for (const d of lines) d.classList.toggle('q', !allQuoted)
+  save()
+}
+
+$('quote').onclick = async () => {
+  const to = target()
+  if (!to) return say('No open chat to quote from')
+  const res = await api('/reply?session=' + encodeURIComponent(to.id))
+  const reply = res && res.ok ? (await res.json()).text : ''
+  if (!reply) return say('No reply from Claude in this chat yet')
+  markSeen(to) // the reply is in hand now: it is no longer news
+  showState()
+  const had = page.querySelectorAll('.q').length
+  appendHtml(quoteHtml(reply) + '<div><br></div>')
+  page.querySelectorAll('.q')[had]?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  say('Click a quoted line and type, or press Enter, to answer right there', 8000)
+}
+
+// ---- pictures: saved as a file the moment they land, shown in place ----
+
+async function upload(blob) {
+  const res = await api('/shot', { method: 'POST', headers: { 'content-type': blob.type }, body: blob })
+  return res && res.ok ? res.json() : null
+}
+
+async function addPicture(file) {
+  say('Adding the picture…', 30000)
+  const shot = await upload(file)
+  if (!shot) return say('The picture could not be added')
+  page.focus()
+  answerHere() // a picture dropped into a quoted line belongs to you, not to the quote
+  document.execCommand('insertHTML', false, '<img src="' + esc(shot.url) + '">')
+  document.execCommand('insertParagraph') // carry on writing right under it
+  say('')
+  save()
+}
+// Pictures go in one after another, and Send waits for the ones still on their way
+let adding = Promise.resolve()
+const addPictures = (files) => { for (const file of files) adding = adding.then(() => addPicture(file)).catch(() => {}) }
+
+// Pictures from an older draft were kept inside the page itself; turn them into files too
+async function settlePictures() {
+  for (const img of page.querySelectorAll('img')) {
+    const src = img.getAttribute('src') || ''
+    if (!src.startsWith('data:')) continue
+    const shot = await upload(await (await fetch(src)).blob())
+    if (!shot) throw new Error('picture')
+    img.setAttribute('src', shot.url)
+  }
+}
+
+const images = (list) => [...list].filter((f) => f.type.startsWith('image/'))
+
+// Point at a picture and two small buttons appear on its corner: make it bigger, or remove it
+let overImg = null
+const hidePic = () => { overImg = null; $('pic').hidden = true }
+function showPic(img) {
+  overImg = img
+  const el = $('pic'), box = img.getBoundingClientRect()
+  el.hidden = false
+  el.querySelector('[data-pic=size]').textContent = img.classList.contains('big') ? 'Smaller' : 'Bigger'
+  el.style.top = (scrollY + box.top + 8) + 'px'
+  el.style.left = Math.max(8, scrollX + box.right - el.offsetWidth - 8) + 'px'
+}
+page.addEventListener('mouseover', (e) => { if (e.target.tagName === 'IMG') showPic(e.target) })
+document.addEventListener('mousemove', (e) => { if (overImg && e.target !== overImg && !e.target.closest('#pic')) hidePic() })
+$('pic').addEventListener('mousedown', (e) => e.preventDefault())
+$('pic').onclick = (e) => {
+  const act = e.target.closest('button')?.dataset.pic
+  if (!act || !overImg) return
+  if (act === 'size') {
+    overImg.classList.toggle('big')
+    showPic(overImg)
+  } else {
+    // Removed through the browser's own editing command, so undo brings it back
+    const range = document.createRange()
+    range.selectNode(overImg)
+    getSelection().removeAllRanges()
+    getSelection().addRange(range)
+    page.focus()
+    document.execCommand('delete')
+    hidePic()
+  }
+  save()
+}
+
+// Paste: pictures go in as pictures, everything else as plain text
+page.addEventListener('paste', (e) => {
+  e.preventDefault()
+  const text = e.clipboardData.getData('text/plain')
+  // An app that copies text together with a picture of it (Excel, Word) means the text
+  const textWithPicture = text && [...e.clipboardData.types].includes('text/html')
+  const files = images(e.clipboardData.files)
+  if (files.length && !textWithPicture) return addPictures(files)
+  answerHere()
+  // Copied out of Claude's last reply: it lands as a quote, with a line under it for your answer
+  if (lastReply.text && isFrom(lastReply.text, text)) return pasteQuote(text)
+  document.execCommand('insertText', false, text)
+})
+
+// Drop: the same rule as paste. Only a drag that started on this page keeps its formatting,
+// and it carries a mark no other page can guess.
+const OWN_DRAG = 'application/x-note-page-' + crypto.randomUUID()
+page.addEventListener('dragstart', (e) => e.dataTransfer.setData(OWN_DRAG, '1'))
+page.addEventListener('dragover', (e) => { if ([...e.dataTransfer.types].includes('Files')) e.preventDefault() })
+page.addEventListener('drop', (e) => {
+  if ([...e.dataTransfer.types].includes(OWN_DRAG)) return
+  e.preventDefault()
+  const at = document.caretRangeFromPoint(e.clientX, e.clientY)
+  if (at && page.contains(at.startContainer)) getSelection().setBaseAndExtent(at.startContainer, at.startOffset, at.startContainer, at.startOffset)
+  page.focus()
+  const files = images(e.dataTransfer.files)
+  if (files.length) return addPictures(files)
+  answerHere()
+  document.execCommand('insertText', false, e.dataTransfer.getData('text/plain'))
+})
+
+// ---- which chat gets the page ----
+
+let chats = []
+let picked = kept(sessionStorage, 'note-page:picked') // chosen by hand, for this tab
+let held = kept(localStorage, 'note-page:held')       // the chat this draft was started for; it travels with the draft
+let follows = isBlank()                               // nothing written yet, so the page may still move to the chat used last
+let gone = 0                                          // how many checks in a row the page's chat was missing
+let lastClaim = Date.now()                            // /page commands older than this page do not move it
+let lastReply = { id: '', at: -1, text: '' }          // Claude's last reply in the page's chat, to recognise a pasted part of it
+const names = {}                                      // the name of every chat seen, for one that is away for a moment
+const chat = (id) => chats.find((c) => c.id === id)
+
+// What the page's chat is doing, shown by the dot beside "To": Claude is working, or Claude
+// has replied since you last looked (then Quote reply carries a dot too)
+let seenReply = {} // per chat: the reply already noticed
+try { seenReply = JSON.parse(kept(localStorage, 'note-page:seen-replies')) || {} } catch {}
+function markSeen(to) {
+  seenReply[to.id] = to.replyAt
+  keep(localStorage, 'note-page:seen-replies', JSON.stringify(seenReply))
+}
+function showState() {
+  const to = target()
+  if (to && !(to.id in seenReply)) markSeen(to) // a chat met for the first time: its old reply is not news
+  const fresh = !!to && !to.busy && to.replyAt > (seenReply[to.id] || 0)
+  $('dot').className = !to ? '' : to.busy ? 'busy' : fresh ? 'new' : ''
+  $('quote').classList.toggle('fresh', fresh)
+  chatState = !to ? '' : to.busy ? 'Claude is working…' : fresh ? 'Claude replied' : ''
+}
+// The chat this page is tied to, if any: one picked by hand, or the one its draft was started for.
+// A tied page never falls through to another chat: if its chat is away, it says so and waits.
+const tied = () => picked || (isBlank() ? '' : held)
+const target = () => (tied() ? chat(tied()) : chats[0]) || null
+
+function reloadOnce() {
+  // The helper changed under this page (an update, or another chat took over): start fresh.
+  // At most once in ten seconds, so two helpers of different versions can't bounce the page.
+  if (Date.now() - Number(kept(sessionStorage, 'note-page:reloaded')) < 10000) return
+  keep(sessionStorage, 'note-page:reloaded', String(Date.now()))
+  save()
+  location.reload()
+}
+
+async function refresh() {
+  const res = await api('/sessions')
+  if (res && res.status === 403) {
+    // Another tab may have been let in since: use its key. Otherwise ask to be let in.
+    const newer = kept(localStorage, 'note-page:key')
+    if (newer && newer !== KEY) { KEY = newer; return refresh() }
+    $('locked').hidden = false
+    // Even a page that is not let in keeps itself up to date
+    const now = await fetch('/version').then((r) => (r.ok ? r.text() : '')).catch(() => '')
+    if (now && now !== VERSION) reloadOnce()
+    return
+  }
+  const data = res && res.ok ? await res.json() : null
+  offline = !data
+  if (!data) return show()
+  $('locked').hidden = true
+  if (data.version !== VERSION) return reloadOnce()
+  // Two chats with the same name get a few letters of their id, so they can be told apart
+  const names = data.sessions.map((c) => c.label)
+  chats = data.sessions.map((c) => (names.indexOf(c.label) !== names.lastIndexOf(c.label) ? { ...c, label: c.label + ' · ' + c.id.slice(0, 4) } : c))
+
+  const claim = chats.reduce((best, c) => (c.claimedAt > (best ? best.claimedAt : lastClaim) ? c : best), null)
+  if (claim) {
+    // /page was just run in a chat: this page goes there now, whatever it was tied to
+    lastClaim = claim.claimedAt
+    picked = ''
+    held = claim.id
+    follows = false
+    if (!isBlank()) say('This page now goes to ' + claim.label, 6000)
+  } else if (isBlank() || follows || !held) {
+    // An empty page follows the chat you used last; the first keystroke settles it
+    held = chats[0] ? chats[0].id : ''
+  }
+  if (!isBlank()) follows = false
+
+  gone = tied() && !chat(tied()) ? gone + 1 : 0
+  if (gone === 3) say('The chat this page is for is not connected. Reopen it, or pick another in "To".', 8000)
+  keep(sessionStorage, 'note-page:picked', picked)
+  keep(localStorage, 'note-page:held', held)
+  for (const c of chats) names[c.id] = c.label
+  // Keep Claude's last reply of the page's chat at hand, fetched again only when it changes
+  const to = target()
+  if (to && (to.id !== lastReply.id || to.replyAt !== lastReply.at)) {
+    lastReply = { id: to.id, at: to.replyAt, text: lastReply.id === to.id ? lastReply.text : '' }
+    api('/reply?session=' + encodeURIComponent(to.id)).then(async (res) => {
+      if (res && res.ok && lastReply.id === to.id) lastReply.text = (await res.json()).text
+    })
+  }
+  $('target-name').textContent = target() ? target().label : tied() ? (names[tied()] ? names[tied()] + ' (not connected)' : 'chat not connected') : 'no open chat'
+  showState()
+  show()
+}
+setInterval(() => { if (!document.hidden) refresh() }, 3000)
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh() })
+addEventListener('focus', () => refresh())
+
+// One request kept open for as long as this page is: how the helper knows a page is open, even
+// while its window is hidden (the /page command asks before opening a second window)
+;(async function watch() {
+  for (;;) {
+    try {
+      const res = await fetch('/watch?k=' + KEY)
+      if (res.ok) { const reader = res.body.getReader(); while (!(await reader.read()).done); }
+      else await new Promise((done) => setTimeout(done, 3000)) // not let in yet: no hurry
+    } catch {}
+    await new Promise((done) => setTimeout(done, 700))
+  }
+})()
+
+// Two windows on the same draft stay the same: the one not being written in takes the other's text
+addEventListener('storage', (e) => {
+  if (e.key === 'note-page:key' && e.newValue && e.newValue !== KEY) { KEY = e.newValue; refresh() }
+  if (e.key !== 'note-page' || document.hasFocus()) return
+  page.innerHTML = e.newValue || ''
+  held = kept(localStorage, 'note-page:held')
+  follows = isBlank()
+  wasBlank = follows
+  showEmpty()
+  show()
+})
+
+// ---- small menus ----
+
+const pops = [$('menu'), $('chats'), $('history')]
+const closeAll = () => pops.forEach((p) => { p.hidden = true })
+function open(pop, from) {
+  const wasOpen = !pop.hidden
+  closeAll()
+  if (wasOpen) return
+  pop.hidden = false
+  if (pop === $('history')) return
+  const box = from.getBoundingClientRect()
+  pop.style.bottom = (innerHeight - box.top + 10) + 'px'
+  pop.style.left = Math.max(12, Math.min(box.left, innerWidth - pop.offsetWidth - 12)) + 'px'
+}
+// Clicking a control must not take the cursor out of the page
+for (const el of [$('bar'), ...pops]) el.addEventListener('mousedown', (e) => e.preventDefault())
+document.addEventListener('mousedown', (e) => { if (!e.target.closest('#bar, .pop, #history')) closeAll() })
+
+$('target').onclick = () => {
+  const list = $('chats')
+  list.innerHTML = '<small>Send this page to</small>' + chats.map((c) =>
+    '<button data-id="' + esc(c.id) + '" role="menuitemradio" aria-checked="' + (target() && c.id === target().id) + '">' + esc(c.label) + '</button>').join('') +
+    (tied() ? '<button data-id="">Follow the chat I used last</button>' : '')
+  open(list, $('target'))
+}
+$('chats').onclick = (e) => {
+  const item = e.target.closest('button')
+  if (!item) return
+  picked = item.dataset.id
+  if (!picked) held = '' // "follow": let go of the chat this draft was started for too
+  closeAll()
+  refresh()
+}
+
+// ---- focus mode ----
+
+let focusOn = kept(localStorage, 'note-page:focus') === '1'
+function mark() {
+  const at = focusOn ? getSelection().anchorNode : null
+  const el = at && (at.nodeType === 1 ? at : at.parentNode)
+  const line = el && el !== page && page.contains(el) ? el.closest('div') : null
+  for (const old of page.querySelectorAll('.now')) if (old !== line) old.classList.remove('now')
+  if (line && line !== page) line.classList.add('now')
+}
+function setFocus(on) {
+  focusOn = on
+  keep(localStorage, 'note-page:focus', on ? '1' : '')
+  document.body.classList.toggle('focus', on)
+  $('focus-item').setAttribute('aria-checked', String(on))
+  mark()
+}
+document.addEventListener('selectionchange', mark)
+
+// ---- sharpen on send ----
+
+let sharpenOn = kept(localStorage, 'note-page:sharpen') === '1'
+function setSharpen(on) {
+  sharpenOn = on
+  keep(localStorage, 'note-page:sharpen', on ? '1' : '')
+  $('sharpen').setAttribute('aria-pressed', String(on))
+}
+$('sharpen').onclick = () => setSharpen(!sharpenOn)
+
+// ---- sent pages ----
+
+const when = (ms) => {
+  const d = new Date(ms), time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const days = Math.floor((new Date().setHours(0, 0, 0, 0) - new Date(ms).setHours(0, 0, 0, 0)) / 864e5)
+  return days === 0 ? time : days === 1 ? 'Yesterday ' + time : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + time
+}
+let sent = []
+async function openHistory() {
+  const res = await api('/history')
+  sent = res && res.ok ? await res.json() : []
+  $('history').innerHTML = '<h2>Sent pages. Click one to bring it back.</h2>' + (sent.length ? sent.map((s, i) => {
+    const count = (String(s.text).match(/\S+/g) || []).length
+    return '<button data-i="' + i + '"><span class="what">' + esc(String(s.text).replace(/\s+/g, ' ').slice(0, 140)) + '</span>' +
+      '<span class="meta">' + esc(when(s.at) + ' · ' + s.label + ' · ' + count + (count === 1 ? ' word' : ' words')) + '</span></button>'
+  }).join('') : '<p>Nothing sent yet.</p>') +
+    '<p class="stored">Pictures and sent pages are kept on this Mac for 30 days.<button data-wipe>Delete all now</button></p>'
+  open($('history'))
+}
+$('history').onclick = (e) => {
+  const item = e.target.closest('button')
+  if (!item) return
+  if ('wipe' in item.dataset) {
+    // Two clicks, so a slip of the hand deletes nothing
+    if (!item.dataset.sure) { item.dataset.sure = '1'; item.textContent = 'Click again to delete them all'; return }
+    return wipe()
+  }
+  const entry = sent[Number(item.dataset.i)]
+  closeAll()
+  appendHtml(entry.html || String(entry.text).split('\n').map((l) => '<div>' + (esc(l) || '<br>') + '</div>').join(''))
+  say('Brought back')
+}
+
+async function wipe() {
+  closeAll()
+  // The pictures on the page being written stay: the page names them
+  const keepNames = [...toText(page).matchAll(/^\[screenshot: (shot-[\w-]+\.\w+)\]$/gm)].map((m) => m[1])
+  const res = await api('/wipe', { method: 'POST', body: JSON.stringify({ keep: keepNames }) })
+  const out = res && res.ok ? await res.json() : null
+  if (!out || !out.ok) return say('Not deleted. Is a Claude chat still open?', 6000)
+  sent = []
+  lastSent = null
+  keep(localStorage, 'note-page:last', '')
+  showEmpty()
+  say('Deleted: ' + out.pictures + (out.pictures === 1 ? ' picture' : ' pictures') + ' and every sent page.', 6000)
+}
+
+// ---- sending ----
+
+function clearPage() {
+  page.focus()
+  document.execCommand('selectAll')
+  document.execCommand('delete') // through the editing command, so undo brings the text back
+  // The browser keeps the block the selection began in. If that was a quoted line, one more
+  // delete empties the page for real.
+  if (page.querySelector('.q, blockquote')) document.execCommand('delete')
+  save()
+  show()
+}
+
+let sending = false
+// Names this page for the helper. Pressing Send again after a try that was not confirmed
+// reuses the name, so the same page can never land in the chat twice.
+let attempt = ''
+async function send(keepText) {
+  if (sending) return
+  sending = true
+  try {
+    await adding
+    await settlePictures()
+    const text = toText(page)
+    if (!text) return say('Nothing to send')
+    const to = target()
+    // Always name the chat: the helper never picks one for a page
+    const session = tied() || (to ? to.id : '')
+    if (!session) return say('No chat is connected right now. Open a Claude chat and type in it.', 7000)
+    attempt ||= crypto.randomUUID()
+    const html = cleanHtml()
+    const res = await api('/send', { method: 'POST', body: JSON.stringify({ text, html, session, sharpen: sharpenOn, id: attempt }) })
+    if (res && res.status === 403) { refresh(); return }
+    const out = res && res.ok ? await res.json() : null
+    if (!out) return say('Not sent. Is a Claude chat still open?', 6000)
+    if (!out.ok) return say(out.error, 7000)
+    attempt = ''
+    // What an empty page shows next: the page just sent, with a way to bring it back
+    lastSent = { label: out.label, at: Date.now(), text, html }
+    if (!keep(localStorage, 'note-page:last', JSON.stringify(lastSent))) keep(localStorage, 'note-page:last', JSON.stringify({ ...lastSent, html: '' }))
+    keep(localStorage, 'note-page:used', '1')
+    const busy = !!(to && to.busy)
+    if (to) { markSeen(to); showState() } // you answered: the reply before this is no longer news
+    if (!keepText) clearPage()
+    say(busy ? 'Sent. Claude will read it after the task it is on.' : 'Sent to ' + out.label, busy ? 6000 : 4000)
+  } catch {
+    say('Not sent. A picture could not be saved.', 6000)
+  } finally {
+    sending = false
+  }
+}
+
+$('send').onclick = () => send(false)
+$('more').onclick = () => open($('menu'), $('more'))
+$('menu').onclick = (e) => {
+  const item = e.target.closest('button')
+  if (!item) return
+  closeAll()
+  if (item.dataset.do === 'history') openHistory()
+  if (item.dataset.do === 'keep') send(true)
+  if (item.dataset.do === 'quote') toggleQuote()
+  if (item.dataset.do === 'focus') setFocus(!focusOn)
+  if (item.dataset.do === 'clear') clearPage()
+}
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeAll()
+  // A held key repeats: only the first press sends
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); if (!e.repeat) send(e.shiftKey) }
+})
+
+setFocus(focusOn)
+setSharpen(sharpenOn)
+save()
+show()
+refresh()
+page.focus()
+</script>
+</html>
